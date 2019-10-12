@@ -4,5 +4,17 @@ version = "0.1.0"
 authors = ["Walter Pearce <jaynus@gmail.com>"]
 edition = "2018"
 license = "MIT"
+description = "graphing library made for the specific use cases of rendy and amethyst"
 
 [dependencies]
+derivative = "1"
+shrinkwraprs = "0.2"
+smallvec = "0.6"
+bumpalo = "2.6"
+rayon = "1.2"
+
+# TODO: Future serde support
+#serde = { version = "1", optional = true }
+#[features]
+#default = ["serde-1"]
+#serde-1 = [ "serde/derive" ]
