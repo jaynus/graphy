@@ -1,0 +1,8 @@
+[package]
+name = "graphy"
+version = "0.1.0"
+authors = ["Walter Pearce <jaynus@gmail.com>"]
+edition = "2018"
+license = "MIT"
+
+[dependencies]
