@@ -132,9 +132,9 @@ impl<'a, N> Nodes<'a, N> {
         self.inner[index.index()].as_mut().unwrap()
     }
 
-    // fn get_unchecked(&self, index: NodeIndex) -> &Node<N> {
-    //     self.inner[index.index()].as_ref().unwrap()
-    // }
+    fn get_unchecked(&self, index: NodeIndex) -> &Node<N> {
+        self.inner[index.index()].as_ref().unwrap()
+    }
 
     fn exists(&self, index: NodeIndex) -> bool {
         self.inner.get(index.index()).map_or(false, |n| n.is_some())
@@ -166,9 +166,9 @@ impl<'a, E> Edges<'a, E> {
         self.inner[index.index()].as_ref().unwrap()
     }
 
-    // fn get_mut_unchecked(&mut self, index: EdgeIndex) -> &mut Edge<E> {
-    //     self.inner[index.index()].as_mut().unwrap()
-    // }
+    fn get_mut_unchecked(&mut self, index: EdgeIndex) -> &mut Edge<E> {
+        self.inner[index.index()].as_mut().unwrap()
+    }
 
     fn exists(&self, index: EdgeIndex) -> bool {
         self.inner.get(index.index()).map_or(false, |n| n.is_some())
@@ -239,6 +239,40 @@ impl<'a, N, E> Graph<'a, N, E> {
         self.nodes.get_mut_unchecked(from).outgoing.push(index);
         self.nodes.get_mut_unchecked(to).incoming.push(index);
         Ok(index)
+    }
+
+    /// Modify all children edges of source node to be children of target node.
+    /// This leaves source node without children.
+    pub fn rewire_children(
+        &mut self,
+        source: NodeIndex,
+        target: NodeIndex,
+    ) -> Result<(), GraphError> {
+        if !self.nodes.exists(source) || !self.nodes.exists(target) {
+            return Err(GraphError::InvalidIndex);
+        }
+
+        if source == target {
+            return Ok(());
+        }
+
+        for edge_index in &self.nodes.get_unchecked(source).outgoing {
+            self.edges.get_mut_unchecked(*edge_index).nodes.from = target;
+        }
+
+        if target.index() < source.index() {
+            let (left, right) = self.nodes.inner.split_at_mut(source.index());
+            let target_node = left[target.index()].as_mut().unwrap();
+            let source_node = right[0].as_mut().unwrap();
+            target_node.outgoing.extend(source_node.outgoing.drain());
+        } else {
+            let (left, right) = self.nodes.inner.split_at_mut(target.index());
+            let source_node = left[source.index()].as_mut().unwrap();
+            let target_node = right[0].as_mut().unwrap();
+            target_node.outgoing.extend(source_node.outgoing.drain());
+        }
+
+        Ok(())
     }
 
     pub fn update_edge(
@@ -339,13 +373,9 @@ impl<'a, N, E> Graph<'a, N, E> {
         index: NodeIndex,
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
         let node = self.nodes.get(index)?;
-        Ok(node.outgoing.iter().filter_map(move |edge_index| {
+        Ok(node.outgoing.iter().map(move |edge_index| {
             let edge = self.edges.get_unchecked(*edge_index);
-            if edge.nodes.from == index {
-                Some((&edge.inner, &node.inner))
-            } else {
-                None
-            }
+            (&edge.inner, &node.inner)
         }))
     }
 
@@ -354,13 +384,9 @@ impl<'a, N, E> Graph<'a, N, E> {
         index: NodeIndex,
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
         let node = self.nodes.get(index)?;
-        Ok(node.incoming.iter().filter_map(move |edge_index| {
+        Ok(node.incoming.iter().map(move |edge_index| {
             let edge = self.edges.get_unchecked(*edge_index);
-            if edge.nodes.to == index {
-                Some((&edge.inner, &node.inner))
-            } else {
-                None
-            }
+            (&edge.inner, &node.inner)
         }))
     }
 
@@ -423,10 +449,8 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ParentsWalker {
         if let Ok(node) = graph.nodes.get(self.node) {
             if let Some(edge_index) = node.incoming.get(self.next) {
                 let edge = graph.edges.get_unchecked(*edge_index);
-                if edge.nodes.to == self.node {
-                    self.next += 1;
-                    return Some((*edge_index, edge.nodes.from));
-                }
+                self.next += 1;
+                return Some((*edge_index, edge.nodes.from));
             }
         }
         None
@@ -497,6 +521,36 @@ mod tests {
         assert_eq!(Some((edge4, node4)), parents.walk_next(&graph));
         assert_eq!(Some((edge5, node5)), parents.walk_next(&graph));
         assert_eq!(None, parents.walk_next(&graph));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewire_children() -> Result<(), GraphError> {
+        let allocator = GraphAllocator::default();
+        let mut graph = Graph::<TestNode, TestEdge>::default();
+
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+
+        let edge1 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node1, node2)?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node1, node3)?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node3, node4)?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node3, node5)?;
+
+        graph.rewire_children(node1, node3)?;
+
+        let mut children = node1.children();
+        assert_eq!(None, children.walk_next(&graph));
+
+        let mut children = node3.children();
+        assert_eq!(Some((edge3, node4)), children.walk_next(&graph));
+        assert_eq!(Some((edge4, node5)), children.walk_next(&graph));
+        assert_eq!(Some((edge1, node2)), children.walk_next(&graph));
+        assert_eq!(Some((edge2, node3)), children.walk_next(&graph));
+        assert_eq!(None, children.walk_next(&graph));
         Ok(())
     }
 }
