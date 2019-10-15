@@ -8,7 +8,6 @@ description = "graphing library made for the specific use cases of rendy and ame
 
 [dependencies]
 derivative = "1"
-shrinkwraprs = "0.2"
 smallvec = "0.6"
 bumpalo = "2.6"
 rayon = "1.2"
