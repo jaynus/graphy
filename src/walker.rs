@@ -46,6 +46,10 @@ pub trait Walker<Context> {
     }
 }
 
+pub trait ExactSizeWalker<Context> {
+    fn len(&self, context: Context) -> usize;
+}
+
 /// A walker and its context wrapped into an iterator.
 #[derive(Clone, Debug)]
 pub struct WalkerIter<W, C> {
@@ -83,6 +87,16 @@ where
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.walker.walk_next(self.context.clone())
+    }
+}
+
+impl<W, C> std::iter::ExactSizeIterator for WalkerIter<W, C>
+where
+    W: Walker<C> + ExactSizeWalker<C>,
+    C: Clone,
+{
+    fn len(&self) -> usize {
+        self.walker.len(self.context.clone())
     }
 }
 

@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use derivative::Derivative;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-pub use walker::Walker;
+pub use walker::{ExactSizeWalker, Walker};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Node<T> {
@@ -90,6 +90,9 @@ impl NodeIndex {
     pub fn new(value: u32) -> Self {
         Self(value as _)
     }
+    pub fn end() -> Self {
+        Self(u32::max_value())
+    }
     pub fn index(&self) -> usize {
         self.0 as _
     }
@@ -121,6 +124,9 @@ impl EdgeIndex {
     pub fn new(value: u32) -> Self {
         Self(value as _)
     }
+    pub fn end() -> Self {
+        Self(u32::max_value())
+    }
     pub fn index(&self) -> usize {
         self.0 as _
     }
@@ -149,18 +155,16 @@ struct Nodes<'a, N> {
 }
 
 impl<'a, N> Nodes<'a, N> {
-    fn get(&self, index: NodeIndex) -> Result<&Node<N>, GraphError> {
+    fn get(&self, index: NodeIndex) -> Option<&Node<N>> {
         self.inner
             .get(index.index())
             .and_then(|n| n.as_ref().map(|n| &**n))
-            .ok_or(GraphError::InvalidIndex)
     }
 
-    fn get_mut(&mut self, index: NodeIndex) -> Result<&mut Node<N>, GraphError> {
+    fn get_mut(&mut self, index: NodeIndex) -> Option<&mut Node<N>> {
         self.inner
             .get_mut(index.index())
             .and_then(|n| n.as_mut().map(|n| &mut **n))
-            .ok_or(GraphError::InvalidIndex)
     }
 
     fn get_mut_unchecked(&mut self, index: NodeIndex) -> &mut Node<N> {
@@ -202,18 +206,16 @@ struct Edges<'a, E> {
 }
 
 impl<'a, E> Edges<'a, E> {
-    fn get(&self, index: EdgeIndex) -> Result<&Edge<E>, GraphError> {
+    fn get(&self, index: EdgeIndex) -> Option<&Edge<E>> {
         self.inner
             .get(index.index())
             .and_then(|e| e.as_ref().map(|e| &**e))
-            .ok_or(GraphError::InvalidIndex)
     }
 
-    fn get_mut(&mut self, index: EdgeIndex) -> Result<&mut Edge<E>, GraphError> {
+    fn get_mut(&mut self, index: EdgeIndex) -> Option<&mut Edge<E>> {
         self.inner
             .get_mut(index.index())
             .and_then(|e| e.as_mut().map(|e| &mut **e))
-            .ok_or(GraphError::InvalidIndex)
     }
 
     fn get_unchecked(&self, index: EdgeIndex) -> &Edge<E> {
@@ -236,9 +238,13 @@ pub struct Graph<'a, N, E> {
     edges: Edges<'a, E>,
 }
 impl<'a, N, E> Graph<'a, N, E> {
-    pub fn remove_node(&mut self, index: NodeIndex) -> Result<(), GraphError> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn remove_node(&mut self, index: NodeIndex) {
         if !self.nodes.exists(index) {
-            return Err(GraphError::InvalidIndex);
+            return;
         }
         if let Some(node) = &self.nodes.inner[index.index()] {
             for edge_index in node.incoming.iter().chain(&node.outgoing) {
@@ -246,7 +252,6 @@ impl<'a, N, E> Graph<'a, N, E> {
             }
         }
         self.nodes.inner[index.index()] = None;
-        Ok(())
     }
 
     pub fn node_count(&self) -> u32 {
@@ -257,24 +262,38 @@ impl<'a, N, E> Graph<'a, N, E> {
         self.edges.inner.len() as u32
     }
 
-    pub fn insert_node(
-        &mut self,
-        allocator: &'a GraphAllocator,
-        inner: N,
-    ) -> Result<NodeIndex, GraphError> {
+    pub fn insert_node(&mut self, allocator: &'a GraphAllocator, inner: N) -> NodeIndex {
         let index = NodeIndex(self.nodes.inner.len() as u32);
         self.nodes
             .inner
             .push(Some(allocator.0.alloc(Node::new(inner))));
-        Ok(index)
+        index
+    }
+
+    pub fn insert_child(
+        &mut self,
+        allocator: &'a GraphAllocator,
+        parent: NodeIndex,
+        edge: E,
+        node: N,
+    ) -> (EdgeIndex, NodeIndex) {
+        let node_index = NodeIndex(self.nodes.inner.len() as u32);
+        let edge_index = EdgeIndex(self.edges.inner.len() as u32);
+        self.nodes
+            .inner
+            .push(Some(allocator.0.alloc(Node::new(node))));
+        self.edges
+            .inner
+            .push(Some(allocator.0.alloc(Edge::new(edge, parent, node_index))));
+        (edge_index, node_index)
     }
 
     pub fn insert_edge<F>(
         &mut self,
         _allocator: &'a GraphAllocator,
-        _inner: E,
         _from: NodeIndex,
         _to: NodeIndex,
+        _inner: E,
         _cyclic_fn: F,
     ) -> Result<EdgeIndex, GraphError>
     where
@@ -286,9 +305,9 @@ impl<'a, N, E> Graph<'a, N, E> {
     pub fn insert_edge_unchecked(
         &mut self,
         allocator: &'a GraphAllocator,
-        inner: E,
         from: NodeIndex,
         to: NodeIndex,
+        inner: E,
     ) -> Result<EdgeIndex, GraphError> {
         if !self.nodes.exists(from) || !self.nodes.exists(to) {
             return Err(GraphError::InvalidIndex);
@@ -398,7 +417,10 @@ impl<'a, N, E> Graph<'a, N, E> {
         from: Option<NodeIndex>,
         to: Option<NodeIndex>,
     ) -> Result<(), GraphError> {
-        let edge = self.edges.get_mut(edge_index)?;
+        let edge = self
+            .edges
+            .get_mut(edge_index)
+            .ok_or(GraphError::InvalidIndex)?;
 
         let nodes = &self.nodes;
         if from.map_or(false, |from| !nodes.exists(from))
@@ -475,7 +497,7 @@ impl<'a, N, E> Graph<'a, N, E> {
     where
         V: FnMut(&Graph<N, E>, &N, &E) -> bool,
     {
-        let node = self.nodes.get(node_index)?;
+        let node = self.nodes.get(node_index).ok_or(GraphError::InvalidIndex)?;
         for edge_index in &node.outgoing {
             let edge = self.edges.get_unchecked(*edge_index);
             if visitor(self, &node.inner, &edge.inner) {
@@ -489,7 +511,7 @@ impl<'a, N, E> Graph<'a, N, E> {
         &'b self,
         index: NodeIndex,
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
-        let node = self.nodes.get(index)?;
+        let node = self.nodes.get(index).ok_or(GraphError::InvalidIndex)?;
         Ok(node.outgoing.iter().map(move |edge_index| {
             let edge = self.edges.get_unchecked(*edge_index);
             (&edge.inner, &node.inner)
@@ -500,26 +522,26 @@ impl<'a, N, E> Graph<'a, N, E> {
         &'b self,
         index: NodeIndex,
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
-        let node = self.nodes.get(index)?;
+        let node = self.nodes.get(index).ok_or(GraphError::InvalidIndex)?;
         Ok(node.incoming.iter().map(move |edge_index| {
             let edge = self.edges.get_unchecked(*edge_index);
             (&edge.inner, &node.inner)
         }))
     }
 
-    pub fn get_node(&self, index: NodeIndex) -> Result<&N, GraphError> {
+    pub fn get_node(&self, index: NodeIndex) -> Option<&N> {
         self.nodes.get(index).map(|node| &node.inner)
     }
 
-    pub fn get_node_mut(&mut self, index: NodeIndex) -> Result<&mut N, GraphError> {
+    pub fn get_node_mut(&mut self, index: NodeIndex) -> Option<&mut N> {
         self.nodes.get_mut(index).map(|node| &mut node.inner)
     }
 
-    pub fn get_edge(&self, index: EdgeIndex) -> Result<&E, GraphError> {
+    pub fn get_edge(&self, index: EdgeIndex) -> Option<&E> {
         self.edges.get(index).map(|edge| &edge.inner)
     }
 
-    pub fn get_edge_mut(&mut self, edge: EdgeIndex) -> Result<&mut E, GraphError> {
+    pub fn get_edge_mut(&mut self, edge: EdgeIndex) -> Option<&mut E> {
         self.edges.get_mut(edge).map(|edge| &mut edge.inner)
     }
 
@@ -540,7 +562,7 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ChildrenWalker {
 
     #[inline(always)]
     fn walk_next(&mut self, graph: &Graph<'a, N, E>) -> Option<Self::Item> {
-        if let Ok(node) = graph.nodes.get(self.node) {
+        if let Some(node) = graph.nodes.get(self.node) {
             if let Some(edge_index) = node.outgoing.get(self.next) {
                 let edge = graph.edges.get_unchecked(*edge_index);
                 if edge.nodes.from == self.node {
@@ -550,6 +572,16 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ChildrenWalker {
             }
         }
         None
+    }
+}
+
+impl<'a, N, E> ExactSizeWalker<&Graph<'a, N, E>> for ChildrenWalker {
+    #[inline(always)]
+    fn len(&self, graph: &Graph<'a, N, E>) -> usize {
+        graph
+            .nodes
+            .get(self.node)
+            .map_or(0, |node| node.outgoing.len())
     }
 }
 
@@ -563,7 +595,7 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ParentsWalker {
 
     #[inline(always)]
     fn walk_next(&mut self, graph: &Graph<'a, N, E>) -> Option<Self::Item> {
-        if let Ok(node) = graph.nodes.get(self.node) {
+        if let Some(node) = graph.nodes.get(self.node) {
             if let Some(edge_index) = node.incoming.get(self.next) {
                 let edge = graph.edges.get_unchecked(*edge_index);
                 self.next += 1;
@@ -571,6 +603,16 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ParentsWalker {
             }
         }
         None
+    }
+}
+
+impl<'a, N, E> ExactSizeWalker<&Graph<'a, N, E>> for ParentsWalker {
+    #[inline(always)]
+    fn len(&self, graph: &Graph<'a, N, E>) -> usize {
+        graph
+            .nodes
+            .get(self.node)
+            .map_or(0, |node| node.incoming.len())
     }
 }
 
@@ -596,17 +638,17 @@ mod tests {
         let allocator = GraphAllocator::default();
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
-        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
-        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
-        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
-        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
-        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 });
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
 
-        graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node1, node2)?;
-        graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node2, node3)?;
-        graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node3, node4)?;
-        graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node3, node4)?;
-        graph.insert_edge_unchecked(&allocator, TestEdge { value: 5 }, node4, node5)?;
+        graph.insert_edge_unchecked(&allocator, node1, node2, TestEdge { value: 1 })?;
+        graph.insert_edge_unchecked(&allocator, node2, node3, TestEdge { value: 2 })?;
+        graph.insert_edge_unchecked(&allocator, node3, node4, TestEdge { value: 3 })?;
+        graph.insert_edge_unchecked(&allocator, node3, node4, TestEdge { value: 4 })?;
+        graph.insert_edge_unchecked(&allocator, node4, node5, TestEdge { value: 5 })?;
 
         Ok(())
     }
@@ -616,17 +658,17 @@ mod tests {
         let allocator = GraphAllocator::default();
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
-        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
-        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
-        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
-        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
-        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 });
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
 
-        let edge1 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node1, node2)?;
-        let edge2 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node1, node3)?;
-        let edge3 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node1, node4)?;
-        let edge4 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node4, node1)?;
-        let edge5 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 5 }, node5, node1)?;
+        let edge1 = graph.insert_edge_unchecked(&allocator, node1, node2, TestEdge { value: 1 })?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, node1, node3, TestEdge { value: 2 })?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, node1, node4, TestEdge { value: 3 })?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, node4, node1, TestEdge { value: 4 })?;
+        let edge5 = graph.insert_edge_unchecked(&allocator, node5, node1, TestEdge { value: 5 })?;
 
         let mut children = node1.children();
         assert_eq!(Some((edge1, node2)), children.walk_next(&graph));
@@ -646,16 +688,16 @@ mod tests {
         let allocator = GraphAllocator::default();
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
-        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
-        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
-        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
-        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
-        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 });
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
 
-        let edge1 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node1, node2)?;
-        let edge2 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node1, node3)?;
-        let edge3 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node3, node4)?;
-        let edge4 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node3, node5)?;
+        let edge1 = graph.insert_edge_unchecked(&allocator, node1, node2, TestEdge { value: 1 })?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, node1, node3, TestEdge { value: 2 })?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, node3, node4, TestEdge { value: 3 })?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, node3, node5, TestEdge { value: 4 })?;
 
         graph.rewire_children(node1, node3)?;
 
@@ -676,20 +718,20 @@ mod tests {
         let allocator = GraphAllocator::default();
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
-        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
-        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
-        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
-        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
-        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
-        let node6 = graph.insert_node(&allocator, TestNode { value: 5 })?;
-        let node7 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 });
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
+        let node6 = graph.insert_node(&allocator, TestNode { value: 5 });
+        let node7 = graph.insert_node(&allocator, TestNode { value: 5 });
 
-        let edge1 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node2, node1)?;
-        let edge2 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node3, node1)?;
-        let edge3 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node4, node3)?;
-        let edge4 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node5, node3)?;
-        let edge5 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 5 }, node6, node1)?;
-        let edge6 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 6 }, node7, node3)?;
+        let edge1 = graph.insert_edge_unchecked(&allocator, node2, node1, TestEdge { value: 1 })?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, node3, node1, TestEdge { value: 2 })?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, node4, node3, TestEdge { value: 3 })?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, node5, node3, TestEdge { value: 4 })?;
+        let edge5 = graph.insert_edge_unchecked(&allocator, node6, node1, TestEdge { value: 5 })?;
+        let edge6 = graph.insert_edge_unchecked(&allocator, node7, node3, TestEdge { value: 6 })?;
 
         let mut parents = node1.parents();
         assert_eq!(Some((edge1, node2)), parents.walk_next(&graph));
