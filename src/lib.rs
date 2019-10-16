@@ -20,12 +20,38 @@ impl<T> Node<T> {
             outgoing: SmallVec::default(),
         }
     }
+
+    #[inline]
+    pub fn edges_mut(&mut self, direction: Direction) -> &mut SmallVec<[EdgeIndex; 8]> {
+        match direction {
+            Direction::Incoming => &mut self.incoming,
+            Direction::Outgoing => &mut self.outgoing,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct EdgeNodes {
     from: NodeIndex,
     to: NodeIndex,
+}
+
+impl EdgeNodes {
+    #[inline]
+    fn get_dir(&self, direction: Direction) -> NodeIndex {
+        match direction {
+            Direction::Incoming => self.from,
+            Direction::Outgoing => self.to,
+        }
+    }
+
+    #[inline]
+    fn set_dir(&mut self, direction: Direction, index: NodeIndex) {
+        match direction {
+            Direction::Incoming => self.from = index,
+            Direction::Outgoing => self.to = index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +86,27 @@ impl std::ops::Add for NodeIndex {
     }
 }
 
+impl NodeIndex {
+    pub fn new(value: u32) -> Self {
+        Self(value as _)
+    }
+    pub fn index(&self) -> usize {
+        self.0 as _
+    }
+    pub fn parents(&self) -> ParentsWalker {
+        ParentsWalker {
+            node: *self,
+            next: 0,
+        }
+    }
+    pub fn children(&self) -> ChildrenWalker {
+        ChildrenWalker {
+            node: *self,
+            next: 0,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct EdgeIndex(u32);
 impl std::ops::Add for EdgeIndex {
@@ -70,40 +117,28 @@ impl std::ops::Add for EdgeIndex {
     }
 }
 
-impl NodeIndex {
-    pub fn parents(&self) -> ParentsWalker {
-        ParentsWalker {
-            node: *self,
-            next: 0,
-        }
+impl EdgeIndex {
+    pub fn new(value: u32) -> Self {
+        Self(value as _)
     }
-
-    pub fn children(&self) -> ChildrenWalker {
-        ChildrenWalker {
-            node: *self,
-            next: 0,
-        }
+    pub fn index(&self) -> usize {
+        self.0 as _
     }
 }
 
-pub trait Index {
-    fn new(value: u32) -> Self;
-    fn index(&self) -> usize;
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum Direction {
+    Incoming,
+    Outgoing,
 }
-impl Index for NodeIndex {
-    fn new(value: u32) -> Self {
-        Self(value)
-    }
-    fn index(&self) -> usize {
-        self.0 as usize
-    }
-}
-impl Index for EdgeIndex {
-    fn new(value: u32) -> Self {
-        Self(value)
-    }
-    fn index(&self) -> usize {
-        self.0 as usize
+
+impl Direction {
+    #[inline]
+    fn reverse(&self) -> Self {
+        match self {
+            Direction::Incoming => Direction::Outgoing,
+            Direction::Outgoing => Direction::Incoming,
+        }
     }
 }
 
@@ -138,6 +173,25 @@ impl<'a, N> Nodes<'a, N> {
 
     fn exists(&self, index: NodeIndex) -> bool {
         self.inner.get(index.index()).map_or(false, |n| n.is_some())
+    }
+
+    #[inline]
+    fn pair_mut(&mut self, first: NodeIndex, second: NodeIndex) -> (&mut Node<N>, &mut Node<N>) {
+        if first.index() < second.index() {
+            let (left, right) = self.inner.split_at_mut(second.index());
+            (
+                left[first.index()].as_mut().unwrap(),
+                right[0].as_mut().unwrap(),
+            )
+        } else if first.index() > second.index() {
+            let (left, right) = self.inner.split_at_mut(first.index());
+            (
+                right[0].as_mut().unwrap(),
+                left[second.index()].as_mut().unwrap(),
+            )
+        } else {
+            panic!("Asked for pair of mutable references to the same node")
+        }
     }
 }
 
@@ -195,6 +249,14 @@ impl<'a, N, E> Graph<'a, N, E> {
         Ok(())
     }
 
+    pub fn node_count(&self) -> u32 {
+        self.nodes.inner.len() as u32
+    }
+
+    pub fn edge_count(&self) -> u32 {
+        self.edges.inner.len() as u32
+    }
+
     pub fn insert_node(
         &mut self,
         allocator: &'a GraphAllocator,
@@ -241,8 +303,24 @@ impl<'a, N, E> Graph<'a, N, E> {
         Ok(index)
     }
 
-    /// Modify all children edges of source node to be children of target node.
+    /// Get two nodes as mutable at the same time.
+    /// Node ids must be different.
+    pub fn node_pair_mut(
+        &mut self,
+        first: NodeIndex,
+        second: NodeIndex,
+    ) -> Result<(&mut N, &mut N), GraphError> {
+        if first == second || !self.nodes.exists(first) || !self.nodes.exists(second) {
+            return Err(GraphError::InvalidIndex);
+        }
+        let (first, second) = self.nodes.pair_mut(first, second);
+        Ok((&mut first.inner, &mut second.inner))
+    }
+
+    /// Modify all children edges of source node to be children of `target` node.
     /// This leaves source node without children.
+    ///
+    /// This is essentially a fast path special case of `rewire_where`.
     pub fn rewire_children(
         &mut self,
         source: NodeIndex,
@@ -260,16 +338,55 @@ impl<'a, N, E> Graph<'a, N, E> {
             self.edges.get_mut_unchecked(*edge_index).nodes.from = target;
         }
 
-        if target.index() < source.index() {
-            let (left, right) = self.nodes.inner.split_at_mut(source.index());
-            let target_node = left[target.index()].as_mut().unwrap();
-            let source_node = right[0].as_mut().unwrap();
-            target_node.outgoing.extend(source_node.outgoing.drain());
-        } else {
-            let (left, right) = self.nodes.inner.split_at_mut(target.index());
-            let source_node = left[source.index()].as_mut().unwrap();
-            let target_node = right[0].as_mut().unwrap();
-            target_node.outgoing.extend(source_node.outgoing.drain());
+        let (target_node, source_node) = self.nodes.pair_mut(target, source);
+        target_node.outgoing.extend(source_node.outgoing.drain());
+        Ok(())
+    }
+
+    /// Modify incoming or outgoing edges of source node that match a predicate connecting them to `target` node instead.
+    /// This leaves source node with edges for which the `predicate` returned false.
+    pub fn rewire_where(
+        &mut self,
+        direction: Direction,
+        source: NodeIndex,
+        target: NodeIndex,
+        mut predicate: impl FnMut(&mut E, NodeIndex) -> bool,
+    ) -> Result<(), GraphError> {
+        if !self.nodes.exists(source) || !self.nodes.exists(target) {
+            return Err(GraphError::InvalidIndex);
+        }
+
+        if source == target {
+            return Ok(());
+        }
+
+        let (target_node, source_node) = self.nodes.pair_mut(target, source);
+
+        let source_vec = source_node.edges_mut(direction);
+        let target_vec = target_node.edges_mut(direction);
+
+        // test the edges for rewire and retain ones that don't pass
+        let len = source_vec.len();
+        let mut del = 0;
+        {
+            let v = &mut source_vec[..];
+
+            for i in 0..len {
+                let edge = self.edges.get_mut_unchecked(v[i]);
+                let other_index = edge.nodes.get_dir(direction);
+                if predicate(&mut edge.inner, other_index) {
+                    // Move edges that passed to the new node.
+                    del += 1;
+                    edge.nodes.set_dir(direction.reverse(), target);
+                    target_vec.push(v[i]);
+                } else if del > 0 {
+                    v.swap(i - del, i);
+                }
+            }
+        }
+
+        if del > 0 {
+            source_vec.truncate(len - del);
         }
 
         Ok(())
@@ -551,6 +668,54 @@ mod tests {
         assert_eq!(Some((edge1, node2)), children.walk_next(&graph));
         assert_eq!(Some((edge2, node3)), children.walk_next(&graph));
         assert_eq!(None, children.walk_next(&graph));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewire_parents_where() -> Result<(), GraphError> {
+        let allocator = GraphAllocator::default();
+        let mut graph = Graph::<TestNode, TestEdge>::default();
+
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 })?;
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 })?;
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 })?;
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 })?;
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node6 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+        let node7 = graph.insert_node(&allocator, TestNode { value: 5 })?;
+
+        let edge1 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 1 }, node2, node1)?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 2 }, node3, node1)?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 3 }, node4, node3)?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 4 }, node5, node3)?;
+        let edge5 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 5 }, node6, node1)?;
+        let edge6 = graph.insert_edge_unchecked(&allocator, TestEdge { value: 6 }, node7, node3)?;
+
+        let mut parents = node1.parents();
+        assert_eq!(Some((edge1, node2)), parents.walk_next(&graph));
+        assert_eq!(Some((edge2, node3)), parents.walk_next(&graph));
+        assert_eq!(Some((edge5, node6)), parents.walk_next(&graph));
+        assert_eq!(None, parents.walk_next(&graph));
+
+        let mut parents = node3.parents();
+        assert_eq!(Some((edge3, node4)), parents.walk_next(&graph));
+        assert_eq!(Some((edge4, node5)), parents.walk_next(&graph));
+        assert_eq!(Some((edge6, node7)), parents.walk_next(&graph));
+        assert_eq!(None, parents.walk_next(&graph));
+
+        graph.rewire_where(Direction::Incoming, node1, node3, |e, _| e.value != 2)?;
+
+        let mut parents = node1.parents();
+        assert_eq!(Some((edge2, node3)), parents.walk_next(&graph));
+        assert_eq!(None, parents.walk_next(&graph));
+
+        let mut parents = node3.parents();
+        assert_eq!(Some((edge3, node4)), parents.walk_next(&graph));
+        assert_eq!(Some((edge4, node5)), parents.walk_next(&graph));
+        assert_eq!(Some((edge6, node7)), parents.walk_next(&graph));
+        assert_eq!(Some((edge1, node2)), parents.walk_next(&graph));
+        assert_eq!(Some((edge5, node6)), parents.walk_next(&graph));
+        assert_eq!(None, parents.walk_next(&graph));
         Ok(())
     }
 }
