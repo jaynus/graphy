@@ -2,10 +2,11 @@ pub mod walker;
 
 use bumpalo::Bump;
 use derivative::Derivative;
+use fixedbitset::FixedBitSet;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-pub use walker::{ExactSizeWalker, Walker};
 
+pub use walker::{ExactSizeWalker, Walker};
 #[derive(Debug, Clone, PartialEq)]
 struct Node<T> {
     inner: T,
@@ -252,6 +253,14 @@ impl<'a, N, E> Graph<'a, N, E> {
             }
         }
         self.nodes.inner[index.index()] = None;
+    }
+
+    pub fn node_exists(&self, index: NodeIndex) -> bool {
+        self.nodes.exists(index)
+    }
+
+    pub fn edge_exists(&self, index: EdgeIndex) -> bool {
+        self.edges.exists(index)
     }
 
     pub fn node_count(&self) -> u32 {
@@ -545,6 +554,41 @@ impl<'a, N, E> Graph<'a, N, E> {
         self.edges.get_mut(edge).map(|edge| &mut edge.inner)
     }
 
+    pub fn find_edge(&self, from: NodeIndex, to: NodeIndex) -> Option<&E> {
+        let from_node = self.nodes.get(from)?;
+        let edge = from_node
+            .outgoing
+            .iter()
+            .find_map(|edge| self.edges.get(*edge).filter(|e| e.nodes.to == to))?;
+        Some(&edge.inner)
+    }
+
+    /// Remove all nodes that are not connected to a passed root node in incoming direction.
+    pub fn trim(&mut self, root: NodeIndex) -> Result<(), GraphError> {
+        if !self.nodes.exists(root) {
+            return Err(GraphError::InvalidIndex);
+        }
+
+        let mut is_live = FixedBitSet::with_capacity(self.node_count() as _);
+        let mut live = std::collections::VecDeque::with_capacity(self.node_count() as _);
+
+        is_live.put(root.index());
+        live.push_front(root);
+
+        while let Some(index) = live.pop_front() {
+            for (_, parent) in index.parents().iter(self) {
+                is_live.put(parent.index());
+                live.push_front(parent);
+            }
+        }
+
+        for dead in (0..self.node_count()).filter(|bit| !is_live[*bit as _]) {
+            self.remove_node(NodeIndex::new(dead));
+        }
+
+        Ok(())
+    }
+
     pub fn reset(&mut self, allocator: &'a mut GraphAllocator) {
         self.nodes.inner.clear();
         self.edges.inner.clear();
@@ -723,8 +767,8 @@ mod tests {
         let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
         let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
         let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
-        let node6 = graph.insert_node(&allocator, TestNode { value: 5 });
-        let node7 = graph.insert_node(&allocator, TestNode { value: 5 });
+        let node6 = graph.insert_node(&allocator, TestNode { value: 6 });
+        let node7 = graph.insert_node(&allocator, TestNode { value: 7 });
 
         let edge1 = graph.insert_edge_unchecked(&allocator, node2, node1, TestEdge { value: 1 })?;
         let edge2 = graph.insert_edge_unchecked(&allocator, node3, node1, TestEdge { value: 2 })?;
@@ -758,6 +802,48 @@ mod tests {
         assert_eq!(Some((edge1, node2)), parents.walk_next(&graph));
         assert_eq!(Some((edge5, node6)), parents.walk_next(&graph));
         assert_eq!(None, parents.walk_next(&graph));
+        Ok(())
+    }
+
+    #[test]
+    fn test_trim() -> Result<(), GraphError> {
+        let allocator = GraphAllocator::default();
+        let mut graph = Graph::<TestNode, TestEdge>::default();
+
+        let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
+        let node2 = graph.insert_node(&allocator, TestNode { value: 2 });
+        let node3 = graph.insert_node(&allocator, TestNode { value: 3 });
+        let node4 = graph.insert_node(&allocator, TestNode { value: 4 });
+        let node5 = graph.insert_node(&allocator, TestNode { value: 5 });
+        let node6 = graph.insert_node(&allocator, TestNode { value: 6 });
+        let node7 = graph.insert_node(&allocator, TestNode { value: 7 });
+        let node8 = graph.insert_node(&allocator, TestNode { value: 8 });
+
+        let edge1 = graph.insert_edge_unchecked(&allocator, node2, node1, TestEdge { value: 1 })?;
+        let edge2 = graph.insert_edge_unchecked(&allocator, node4, node1, TestEdge { value: 2 })?;
+        let edge3 = graph.insert_edge_unchecked(&allocator, node4, node3, TestEdge { value: 3 })?;
+        let edge4 = graph.insert_edge_unchecked(&allocator, node5, node3, TestEdge { value: 4 })?;
+        let edge5 = graph.insert_edge_unchecked(&allocator, node6, node1, TestEdge { value: 5 })?;
+        let edge6 = graph.insert_edge_unchecked(&allocator, node7, node3, TestEdge { value: 6 })?;
+
+        graph.trim(node1)?;
+
+        assert_eq!(true, graph.node_exists(node1));
+        assert_eq!(true, graph.node_exists(node2));
+        assert_eq!(false, graph.node_exists(node3));
+        assert_eq!(true, graph.node_exists(node4));
+        assert_eq!(false, graph.node_exists(node5));
+        assert_eq!(true, graph.node_exists(node6));
+        assert_eq!(false, graph.node_exists(node7));
+        assert_eq!(false, graph.node_exists(node8));
+
+        assert_eq!(true, graph.edge_exists(edge1));
+        assert_eq!(true, graph.edge_exists(edge2));
+        assert_eq!(false, graph.edge_exists(edge3));
+        assert_eq!(false, graph.edge_exists(edge4));
+        assert_eq!(true, graph.edge_exists(edge5));
+        assert_eq!(false, graph.edge_exists(edge6));
+
         Ok(())
     }
 }
