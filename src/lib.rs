@@ -1,8 +1,8 @@
 pub mod walker;
 
-use bumpalo::Bump;
 use derivative::Derivative;
 use fixedbitset::FixedBitSet;
+use purple::Arena;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 
@@ -636,7 +636,9 @@ impl<'a, N, E> Graph<'a, N, E> {
     pub fn reset(&mut self, allocator: &'a mut GraphAllocator) {
         self.nodes.inner.clear();
         self.edges.inner.clear();
-        allocator.0.reset();
+        unsafe {
+            allocator.0.reset();
+        }
     }
 }
 
@@ -741,8 +743,13 @@ impl<'a, 'b, E> Iterator for EdgesIndicesIter<'a, 'b, E> {
         None
     }
 }
-#[derive(Debug, Default)]
-pub struct GraphAllocator(Bump);
+#[derive(Debug)]
+pub struct GraphAllocator(Arena);
+impl GraphAllocator {
+    pub fn with_capacity(capacity: usize) -> Self {
+        GraphAllocator(Arena::with_capacity(capacity))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -760,7 +767,7 @@ mod tests {
 
     #[test]
     fn insertion() -> Result<(), GraphError> {
-        let allocator = GraphAllocator::default();
+        let allocator = GraphAllocator::with_capacity(52_428_800);
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
         let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
@@ -780,7 +787,7 @@ mod tests {
 
     #[test]
     fn walk_directions() -> Result<(), GraphError> {
-        let allocator = GraphAllocator::default();
+        let allocator = GraphAllocator::with_capacity(52_428_800);
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
         let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
@@ -810,7 +817,7 @@ mod tests {
 
     #[test]
     fn test_rewire_children() -> Result<(), GraphError> {
-        let allocator = GraphAllocator::default();
+        let allocator = GraphAllocator::with_capacity(52_428_800);
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
         let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
@@ -840,7 +847,7 @@ mod tests {
 
     #[test]
     fn test_rewire_parents_where() -> Result<(), GraphError> {
-        let allocator = GraphAllocator::default();
+        let allocator = GraphAllocator::with_capacity(52_428_800);
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
         let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
@@ -888,7 +895,7 @@ mod tests {
 
     #[test]
     fn test_trim() -> Result<(), GraphError> {
-        let allocator = GraphAllocator::default();
+        let allocator = GraphAllocator::with_capacity(52_428_800);
         let mut graph = Graph::<TestNode, TestEdge>::default();
 
         let node1 = graph.insert_node(&allocator, TestNode { value: 1 });
