@@ -6,18 +6,17 @@
 pub trait Walker<Context> {
     type Item;
     /// Advance to the next item
-    fn walk_next(&mut self, context: Context) -> Option<Self::Item>;
+    fn walk_next(&mut self, context: &Context) -> Option<Self::Item>;
 
     /// Create an iterator out of the walker and given `context`.
     #[inline]
-    fn iter(self, context: Context) -> WalkerIter<Self, Context>
+    fn iter<'a>(self, context: &'a Context) -> WalkerIter<'a, Self, Context>
     where
         Self: Sized,
-        Context: Clone,
     {
         WalkerIter {
             walker: self,
-            context: context,
+            context: &context,
         }
     }
 
@@ -25,7 +24,7 @@ pub trait Walker<Context> {
     fn filter<P>(self, predicate: P) -> Filter<Self, P>
     where
         Self: Sized,
-        P: FnMut(Context, &Self::Item) -> bool,
+        P: FnMut(&Context, &Self::Item) -> bool,
     {
         Filter {
             walker: self,
@@ -37,7 +36,7 @@ pub trait Walker<Context> {
     fn filter_map<P, I>(self, predicate: P) -> FilterMap<Self, P>
     where
         Self: Sized,
-        P: FnMut(Context, &Self::Item) -> Option<I>,
+        P: FnMut(&Context, &Self::Item) -> Option<I>,
     {
         FilterMap {
             walker: self,
@@ -47,24 +46,23 @@ pub trait Walker<Context> {
 }
 
 pub trait ExactSizeWalker<Context> {
-    fn len(&self, context: Context) -> usize;
+    fn len(&self, context: &Context) -> usize;
 }
 
 /// A walker and its context wrapped into an iterator.
 #[derive(Clone, Debug)]
-pub struct WalkerIter<W, C> {
+pub struct WalkerIter<'a, W, C> {
     walker: W,
-    context: C,
+    context: &'a C,
 }
 
-impl<W, C> WalkerIter<W, C>
+impl<'a, W, C> WalkerIter<'a, W, C>
 where
     W: Walker<C>,
-    C: Clone,
 {
     #[inline]
-    pub fn context(&self) -> C {
-        self.context.clone()
+    pub fn context(&self) -> &C {
+        &self.context
     }
 
     #[inline]
@@ -78,22 +76,20 @@ where
     }
 }
 
-impl<W, C> Iterator for WalkerIter<W, C>
+impl<'a, W, C> Iterator for WalkerIter<'a, W, C>
 where
     W: Walker<C>,
-    C: Clone,
 {
     type Item = W::Item;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.walker.walk_next(self.context.clone())
+        self.walker.walk_next(self.context)
     }
 }
 
-impl<W, C> std::iter::ExactSizeIterator for WalkerIter<W, C>
+impl<W, C> std::iter::ExactSizeIterator for WalkerIter<'_, W, C>
 where
     W: Walker<C> + ExactSizeWalker<C>,
-    C: Clone,
 {
     fn len(&self) -> usize {
         self.walker.len(self.context.clone())
@@ -108,13 +104,12 @@ pub struct FilterMap<W, P> {
 
 impl<C, W, I, P> Walker<C> for FilterMap<W, P>
 where
-    C: Copy,
     W: Walker<C>,
-    P: FnMut(C, &W::Item) -> Option<I>,
+    P: FnMut(&C, &W::Item) -> Option<I>,
 {
     type Item = I;
     #[inline]
-    fn walk_next(&mut self, context: C) -> Option<Self::Item> {
+    fn walk_next(&mut self, context: &C) -> Option<Self::Item> {
         while let Some(item) = self.walker.walk_next(context) {
             if let Some(mapped) = (self.predicate)(context, &item) {
                 return Some(mapped);
@@ -132,13 +127,12 @@ pub struct Filter<W, P> {
 
 impl<C, W, P> Walker<C> for Filter<W, P>
 where
-    C: Copy,
     W: Walker<C>,
-    P: FnMut(C, &W::Item) -> bool,
+    P: FnMut(&C, &W::Item) -> bool,
 {
     type Item = W::Item;
     #[inline]
-    fn walk_next(&mut self, context: C) -> Option<Self::Item> {
+    fn walk_next(&mut self, context: &C) -> Option<Self::Item> {
         while let Some(item) = self.walker.walk_next(context) {
             if (self.predicate)(context, &item) {
                 return Some(item);

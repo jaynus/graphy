@@ -168,11 +168,11 @@ impl<'a, N> Nodes<'a, N> {
             .and_then(|n| n.as_mut().map(|n| &mut **n))
     }
 
-    fn get_mut_unchecked(&mut self, index: NodeIndex) -> &mut Node<N> {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Node<N> {
         self.inner[index.index()].as_mut().unwrap()
     }
 
-    fn get_unchecked(&self, index: NodeIndex) -> &Node<N> {
+    fn index(&self, index: NodeIndex) -> &Node<N> {
         self.inner[index.index()].as_ref().unwrap()
     }
 
@@ -227,11 +227,11 @@ impl<'a, E> Edges<'a, E> {
             .and_then(|e| e.as_mut().map(|e| &mut **e))
     }
 
-    fn get_unchecked(&self, index: EdgeIndex) -> &Edge<E> {
+    fn index(&self, index: EdgeIndex) -> &Edge<E> {
         self.inner[index.index()].as_ref().unwrap()
     }
 
-    fn get_mut_unchecked(&mut self, index: EdgeIndex) -> &mut Edge<E> {
+    fn index_mut(&mut self, index: EdgeIndex) -> &mut Edge<E> {
         self.inner[index.index()].as_mut().unwrap()
     }
 
@@ -367,8 +367,8 @@ impl<'a, N, E> Graph<'a, N, E> {
         self.edges
             .inner
             .push(Some(allocator.0.alloc(Edge::new(inner, from, to))));
-        self.nodes.get_mut_unchecked(from).outgoing.push(index);
-        self.nodes.get_mut_unchecked(to).incoming.push(index);
+        self.nodes.index_mut(from).outgoing.push(index);
+        self.nodes.index_mut(to).incoming.push(index);
         Ok(index)
     }
 
@@ -403,8 +403,8 @@ impl<'a, N, E> Graph<'a, N, E> {
             return Ok(());
         }
 
-        for edge_index in &self.nodes.get_unchecked(source).outgoing {
-            self.edges.get_mut_unchecked(*edge_index).nodes.from = target;
+        for edge_index in &self.nodes.index(source).outgoing {
+            self.edges.index_mut(*edge_index).nodes.from = target;
         }
 
         let (target_node, source_node) = self.nodes.pair_mut(target, source);
@@ -441,7 +441,7 @@ impl<'a, N, E> Graph<'a, N, E> {
             let v = &mut source_vec[..];
 
             for i in 0..len {
-                let edge = self.edges.get_mut_unchecked(v[i]);
+                let edge = self.edges.index_mut(v[i]);
                 let other_index = edge.nodes.get_dir(direction);
                 if predicate(&mut edge.inner, other_index) {
                     // Move edges that passed to the new node.
@@ -480,17 +480,17 @@ impl<'a, N, E> Graph<'a, N, E> {
         }
 
         if let Some(from) = from {
-            let next_node = self.nodes.get_mut_unchecked(from);
+            let next_node = self.nodes.index_mut(from);
             next_node.outgoing.push(edge_index);
-            let prev_node = self.nodes.get_mut_unchecked(edge.nodes.from);
+            let prev_node = self.nodes.index_mut(edge.nodes.from);
             prev_node.outgoing.retain(|i| *i != edge_index);
             edge.nodes.from = from;
         }
 
         if let Some(to) = to {
-            let next_node = self.nodes.get_mut_unchecked(to);
+            let next_node = self.nodes.index_mut(to);
             next_node.incoming.push(edge_index);
-            let prev_node = self.nodes.get_mut_unchecked(edge.nodes.to);
+            let prev_node = self.nodes.index_mut(edge.nodes.to);
             prev_node.incoming.retain(|i| *i != edge_index);
             edge.nodes.to = to;
         }
@@ -538,7 +538,7 @@ impl<'a, N, E> Graph<'a, N, E> {
     {
         let node = self.nodes.get(node_index).ok_or(GraphError::InvalidIndex)?;
         for edge_index in &node.outgoing {
-            let edge = self.edges.get_unchecked(*edge_index);
+            let edge = self.edges.index(*edge_index);
             if visitor(self, &node.inner, &edge.inner) {
                 self.visit_traverse(edge.nodes.to, visitor)?;
             }
@@ -552,7 +552,7 @@ impl<'a, N, E> Graph<'a, N, E> {
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
         let node = self.nodes.get(index).ok_or(GraphError::InvalidIndex)?;
         Ok(node.outgoing.iter().map(move |edge_index| {
-            let edge = self.edges.get_unchecked(*edge_index);
+            let edge = self.edges.index(*edge_index);
             (&edge.inner, &node.inner)
         }))
     }
@@ -563,7 +563,7 @@ impl<'a, N, E> Graph<'a, N, E> {
     ) -> Result<impl Iterator<Item = (&'a E, &'a N)> + 'b, GraphError> {
         let node = self.nodes.get(index).ok_or(GraphError::InvalidIndex)?;
         Ok(node.incoming.iter().map(move |edge_index| {
-            let edge = self.edges.get_unchecked(*edge_index);
+            let edge = self.edges.index(*edge_index);
             (&edge.inner, &node.inner)
         }))
     }
@@ -647,14 +647,14 @@ pub struct ChildrenWalker {
     next: usize,
 }
 
-impl<'a, N, E> Walker<&Graph<'a, N, E>> for ChildrenWalker {
+impl<'a, N, E> Walker<Graph<'a, N, E>> for ChildrenWalker {
     type Item = (EdgeIndex, NodeIndex);
 
     #[inline(always)]
     fn walk_next(&mut self, graph: &Graph<'a, N, E>) -> Option<Self::Item> {
         if let Some(node) = graph.nodes.get(self.node) {
             if let Some(edge_index) = node.outgoing.get(self.next) {
-                let edge = graph.edges.get_unchecked(*edge_index);
+                let edge = graph.edges.index(*edge_index);
                 if edge.nodes.from == self.node {
                     self.next += 1;
                     return Some((*edge_index, edge.nodes.to));
@@ -665,7 +665,7 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ChildrenWalker {
     }
 }
 
-impl<'a, N, E> ExactSizeWalker<&Graph<'a, N, E>> for ChildrenWalker {
+impl<'a, N, E> ExactSizeWalker<Graph<'a, N, E>> for ChildrenWalker {
     #[inline(always)]
     fn len(&self, graph: &Graph<'a, N, E>) -> usize {
         graph
@@ -680,14 +680,14 @@ pub struct ParentsWalker {
     next: usize,
 }
 
-impl<'a, N, E> Walker<&Graph<'a, N, E>> for ParentsWalker {
+impl<'a, N, E> Walker<Graph<'a, N, E>> for ParentsWalker {
     type Item = (EdgeIndex, NodeIndex);
 
     #[inline(always)]
     fn walk_next(&mut self, graph: &Graph<'a, N, E>) -> Option<Self::Item> {
         if let Some(node) = graph.nodes.get(self.node) {
             if let Some(edge_index) = node.incoming.get(self.next) {
-                let edge = graph.edges.get_unchecked(*edge_index);
+                let edge = graph.edges.index(*edge_index);
                 self.next += 1;
                 return Some((*edge_index, edge.nodes.from));
             }
@@ -696,7 +696,7 @@ impl<'a, N, E> Walker<&Graph<'a, N, E>> for ParentsWalker {
     }
 }
 
-impl<'a, N, E> ExactSizeWalker<&Graph<'a, N, E>> for ParentsWalker {
+impl<'a, N, E> ExactSizeWalker<Graph<'a, N, E>> for ParentsWalker {
     #[inline(always)]
     fn len(&self, graph: &Graph<'a, N, E>) -> usize {
         graph
@@ -722,6 +722,32 @@ impl<'a, 'b, N> Iterator for NodesIndicesIter<'a, 'b, N> {
             }
         }
         None
+    }
+}
+
+impl<'a, N, E> std::ops::Index<EdgeIndex> for Graph<'a, N, E> {
+    type Output = E;
+    fn index(&self, index: EdgeIndex) -> &Self::Output {
+        &self.edges.index(index).inner
+    }
+}
+
+impl<'a, N, E> std::ops::IndexMut<EdgeIndex> for Graph<'a, N, E> {
+    fn index_mut(&mut self, index: EdgeIndex) -> &mut Self::Output {
+        &mut self.edges.index_mut(index).inner
+    }
+}
+
+impl<'a, N, E> std::ops::Index<NodeIndex> for Graph<'a, N, E> {
+    type Output = N;
+    fn index(&self, index: NodeIndex) -> &Self::Output {
+        &self.nodes.index(index).inner
+    }
+}
+
+impl<'a, N, E> std::ops::IndexMut<NodeIndex> for Graph<'a, N, E> {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
+        &mut self.nodes.index_mut(index).inner
     }
 }
 

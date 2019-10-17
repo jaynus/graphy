@@ -12,7 +12,8 @@ smallvec = "0.6"
 rayon = "1.2"
 fixedbitset = "0.2"
 dot = "0.1"
-purple = { path = "../purple" }
+purple = { git = "https://github.com/jaynus/purple.git", branch = "master" }
+# purple = { path = "../purple" }
 
 # TODO: Future serde support
 #serde = { version = "1", optional = true }
