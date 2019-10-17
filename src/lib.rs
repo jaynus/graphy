@@ -31,10 +31,10 @@ impl<T> Node<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct EdgeNodes {
-    from: NodeIndex,
-    to: NodeIndex,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeNodes {
+    pub from: NodeIndex,
+    pub to: NodeIndex,
 }
 
 impl EdgeNodes {
@@ -213,6 +213,14 @@ impl<'a, E> Edges<'a, E> {
             .and_then(|e| e.as_ref().map(|e| &**e))
     }
 
+    pub fn source(&self, index: EdgeIndex) -> Option<NodeIndex> {
+        self.get(index).map(|edge| edge.nodes.from)
+    }
+
+    pub fn destination(&self, index: EdgeIndex) -> Option<NodeIndex> {
+        self.get(index).map(|edge| edge.nodes.to)
+    }
+
     fn get_mut(&mut self, index: EdgeIndex) -> Option<&mut Edge<E>> {
         self.inner
             .get_mut(index.index())
@@ -242,17 +250,50 @@ impl<'a, N, E> Graph<'a, N, E> {
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn remove_node(&mut self, index: NodeIndex) {
         if !self.nodes.exists(index) {
             return;
         }
-        if let Some(node) = &self.nodes.inner[index.index()] {
-            for edge_index in node.incoming.iter().chain(&node.outgoing) {
-                self.edges.inner[edge_index.index()] = None;
+        self.remove_nodes(&[index])
+    }
+
+    pub fn remove_nodes(&mut self, remove: &[NodeIndex]) {
+        let (total_in, total_out) = remove.iter().fold((0, 0), |(i, o), index| {
+            let (add_i, add_o) = self
+                .nodes
+                .get(*index)
+                .map_or((0, 0), |n| (n.incoming.len(), n.outgoing.len()));
+            (i + add_i, o + add_o)
+        });
+
+        let mut revisit_from = Vec::with_capacity(total_in);
+        let mut revisit_to = Vec::with_capacity(total_out);
+
+        for index in remove {
+            if let Some(node) = &self.nodes.inner[index.index()] {
+                for edge_index in node.incoming.iter() {
+                    revisit_from.extend(self.edges.source(*edge_index));
+                    self.edges.inner[edge_index.index()] = None;
+                }
+                for edge_index in node.outgoing.iter() {
+                    revisit_to.extend(self.edges.destination(*edge_index));
+                    self.edges.inner[edge_index.index()] = None;
+                }
+            }
+            self.nodes.inner[index.index()] = None;
+        }
+
+        let edges = &self.edges;
+        for index in revisit_from {
+            if let Some(node) = &mut self.nodes.inner[index.index()] {
+                node.outgoing.retain(|e| edges.exists(*e));
             }
         }
-        self.nodes.inner[index.index()] = None;
+        for index in revisit_to {
+            if let Some(node) = &mut self.nodes.inner[index.index()] {
+                node.incoming.retain(|e| edges.exists(*e));
+            }
+        }
     }
 
     pub fn node_exists(&self, index: NodeIndex) -> bool {
@@ -463,34 +504,23 @@ impl<'a, N, E> Graph<'a, N, E> {
             .iter()
             .filter_map(|e| e.as_ref().map(|e| &e.inner))
     }
-    pub fn nodes_iter_mut<'b: 'a>(&'b mut self) -> impl Iterator<Item = &mut N> + 'a + 'b {
-        self.nodes
-            .inner
-            .iter_mut()
-            .filter_map(|e| e.as_mut().map(|e| &mut e.inner))
-    }
     pub fn edges_iter(&self) -> impl Iterator<Item = &E> {
         self.edges
             .inner
             .iter()
             .filter_map(|e| e.as_ref().map(|e| &e.inner))
     }
-    pub fn edges_iter_mut<'b: 'a>(&'b mut self) -> impl Iterator<Item = &mut E> + 'a + 'b {
-        self.edges
-            .inner
-            .iter_mut()
-            .filter_map(|e| e.as_mut().map(|e| &mut e.inner))
+    pub fn nodes_indices_iter<'b>(&'b self) -> NodesIndicesIter<'a, 'b, N> {
+        NodesIndicesIter {
+            next: 0,
+            nodes: &self.nodes,
+        }
     }
-
-    pub fn nodes_indices_iter<'b: 'a>(&'b self) -> impl Iterator<Item = NodeIndex> + 'a {
-        (0..self.nodes.inner.len() as u32)
-            .map(|i| NodeIndex::new(i))
-            .filter(move |i| self.nodes.exists(*i))
-    }
-    pub fn edges_indices_iter<'b: 'a>(&'b self) -> impl Iterator<Item = EdgeIndex> + 'a {
-        (0..self.edges.inner.len() as u32)
-            .map(|i| EdgeIndex::new(i))
-            .filter(move |i| self.edges.exists(*i))
+    pub fn edges_indices_iter<'b>(&'b self) -> EdgesIndicesIter<'a, 'b, E> {
+        EdgesIndicesIter {
+            next: 0,
+            edges: &self.edges,
+        }
     }
 
     // Return false from the visitor to stop this branches traversal
@@ -563,6 +593,10 @@ impl<'a, N, E> Graph<'a, N, E> {
         Some(&edge.inner)
     }
 
+    pub fn get_edge_endpoints(&self, index: EdgeIndex) -> Option<EdgeNodes> {
+        self.edges.get(index).map(|edge| edge.nodes)
+    }
+
     /// Remove all nodes that are not connected to a passed root node in incoming direction.
     pub fn trim(&mut self, root: NodeIndex) -> Result<(), GraphError> {
         if !self.nodes.exists(root) {
@@ -573,17 +607,27 @@ impl<'a, N, E> Graph<'a, N, E> {
         let mut live = std::collections::VecDeque::with_capacity(self.node_count() as _);
 
         is_live.put(root.index());
-        live.push_front(root);
+        live.push_back(root);
 
         while let Some(index) = live.pop_front() {
             for (_, parent) in index.parents().iter(self) {
                 is_live.put(parent.index());
-                live.push_front(parent);
+                live.push_back(parent);
             }
         }
 
-        for dead in (0..self.node_count()).filter(|bit| !is_live[*bit as _]) {
-            self.remove_node(NodeIndex::new(dead));
+        // reuse same deque to save allocation
+        let mut dead = live;
+        dead.clear();
+
+        for index in (0..self.node_count()).filter(|bit| !is_live[*bit as _]) {
+            dead.push_back(NodeIndex::new(index));
+        }
+
+        let (left, right) = dead.as_slices();
+        assert_eq!(0, right.len());
+        if left.len() > 0 {
+            self.remove_nodes(left);
         }
 
         Ok(())
@@ -660,6 +704,43 @@ impl<'a, N, E> ExactSizeWalker<&Graph<'a, N, E>> for ParentsWalker {
     }
 }
 
+pub struct NodesIndicesIter<'a, 'b, N> {
+    next: u32,
+    nodes: &'b Nodes<'a, N>,
+}
+
+impl<'a, 'b, N> Iterator for NodesIndicesIter<'a, 'b, N> {
+    type Item = NodeIndex;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next < self.nodes.inner.len() as u32 {
+            let index = NodeIndex::new(self.next);
+            self.next += 1;
+            if self.nodes.exists(index) {
+                return Some(index);
+            }
+        }
+        None
+    }
+}
+
+pub struct EdgesIndicesIter<'a, 'b, E> {
+    next: u32,
+    edges: &'b Edges<'a, E>,
+}
+
+impl<'a, 'b, E> Iterator for EdgesIndicesIter<'a, 'b, E> {
+    type Item = EdgeIndex;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next < self.edges.inner.len() as u32 {
+            let index = EdgeIndex::new(self.next);
+            self.next += 1;
+            if self.edges.exists(index) {
+                return Some(index);
+            }
+        }
+        None
+    }
+}
 #[derive(Debug, Default)]
 pub struct GraphAllocator(Bump);
 

@@ -12,6 +12,7 @@ smallvec = "0.6"
 bumpalo = "2.6"
 rayon = "1.2"
 fixedbitset = "0.2"
+dot = "0.1"
 
 # TODO: Future serde support
 #serde = { version = "1", optional = true }
