@@ -14,7 +14,7 @@ struct Node<T> {
     outgoing: SmallVec<[EdgeIndex; 8]>,
 }
 impl<T> Node<T> {
-    pub fn new(inner: T) -> Self {
+    pub(crate) fn new(inner: T) -> Self {
         Self {
             inner,
             incoming: SmallVec::default(),
@@ -23,7 +23,7 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    pub fn edges_mut(&mut self, direction: Direction) -> &mut SmallVec<[EdgeIndex; 8]> {
+    pub(crate) fn edges_mut(&mut self, direction: Direction) -> &mut SmallVec<[EdgeIndex; 8]> {
         match direction {
             Direction::Incoming => &mut self.incoming,
             Direction::Outgoing => &mut self.outgoing,
@@ -327,14 +327,10 @@ impl<'a, N, E> Graph<'a, N, E> {
         edge: E,
         node: N,
     ) -> (EdgeIndex, NodeIndex) {
-        let node_index = NodeIndex(self.nodes.inner.len() as u32);
-        let edge_index = EdgeIndex(self.edges.inner.len() as u32);
-        self.nodes
-            .inner
-            .push(Some(allocator.0.alloc(Node::new(node))));
-        self.edges
-            .inner
-            .push(Some(allocator.0.alloc(Edge::new(edge, parent, node_index))));
+        let node_index = self.insert_node(allocator, node);
+        let edge_index = self
+            .insert_edge_unchecked(allocator, parent, node_index, edge)
+            .unwrap();
         (edge_index, node_index)
     }
 
@@ -632,14 +628,6 @@ impl<'a, N, E> Graph<'a, N, E> {
 
         Ok(())
     }
-
-    pub fn reset(&mut self, allocator: &'a mut GraphAllocator) {
-        self.nodes.inner.clear();
-        self.edges.inner.clear();
-        unsafe {
-            allocator.0.reset();
-        }
-    }
 }
 
 pub struct ChildrenWalker {
@@ -774,6 +762,11 @@ pub struct GraphAllocator(Arena);
 impl GraphAllocator {
     pub fn with_capacity(capacity: usize) -> Self {
         GraphAllocator(Arena::with_capacity(capacity))
+    }
+
+    // Safety: all references allocated since last reset must already be leaked.
+    pub unsafe fn reset(&mut self) {
+        self.0.reset();
     }
 }
 

@@ -43,6 +43,18 @@ pub trait Walker<Context> {
             predicate,
         }
     }
+
+    #[inline]
+    fn map<F, I>(self, mapper: F) -> Map<Self, F>
+    where
+        Self: Sized,
+        F: FnMut(&Context, Self::Item) -> I,
+    {
+        Map {
+            walker: self,
+            mapper,
+        }
+    }
 }
 
 pub trait ExactSizeWalker<Context> {
@@ -139,5 +151,25 @@ where
             }
         }
         None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Map<W, P> {
+    walker: W,
+    mapper: P,
+}
+
+impl<C, W, I, F> Walker<C> for Map<W, F>
+where
+    W: Walker<C>,
+    F: FnMut(&C, W::Item) -> I,
+{
+    type Item = I;
+    #[inline]
+    fn walk_next(&mut self, context: &C) -> Option<Self::Item> {
+        self.walker
+            .walk_next(context)
+            .map(|item| (self.mapper)(context, item))
     }
 }
