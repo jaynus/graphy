@@ -580,13 +580,13 @@ impl<'a, N, E> Graph<'a, N, E> {
         self.edges.get_mut(edge).map(|edge| &mut edge.inner)
     }
 
-    pub fn find_edge(&self, from: NodeIndex, to: NodeIndex) -> Option<&E> {
-        let from_node = self.nodes.get(from)?;
-        let edge = from_node
+    pub fn find_edge(&self, from: NodeIndex, to: NodeIndex) -> Option<EdgeIndex> {
+        self.nodes
+            .get(from)?
             .outgoing
             .iter()
-            .find_map(|edge| self.edges.get(*edge).filter(|e| e.nodes.to == to))?;
-        Some(&edge.inner)
+            .find(|edge| self.edges.index(**edge).nodes.to == to)
+            .copied()
     }
 
     pub fn get_edge_endpoints(&self, index: EdgeIndex) -> Option<EdgeNodes> {
@@ -630,6 +630,7 @@ impl<'a, N, E> Graph<'a, N, E> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ChildrenWalker {
     node: NodeIndex,
     next: usize,
@@ -663,6 +664,7 @@ impl<'a, N, E> ExactSizeWalker<Graph<'a, N, E>> for ChildrenWalker {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ParentsWalker {
     node: NodeIndex,
     next: usize,

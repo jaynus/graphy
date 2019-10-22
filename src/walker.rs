@@ -55,6 +55,14 @@ pub trait Walker<Context> {
             mapper,
         }
     }
+
+    fn all<F>(self, context: &Context, mut mapper: F) -> bool
+    where
+        Self: Sized,
+        F: FnMut(&Context, Self::Item) -> bool,
+    {
+        self.iter(context).all(|item| mapper(context, item))
+    }
 }
 
 pub trait ExactSizeWalker<Context> {
