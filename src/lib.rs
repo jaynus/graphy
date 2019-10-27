@@ -88,21 +88,26 @@ impl std::ops::Add for NodeIndex {
 }
 
 impl NodeIndex {
+    #[inline]
     pub fn new(value: u32) -> Self {
         Self(value as _)
     }
+    #[inline]
     pub fn end() -> Self {
         Self(u32::max_value())
     }
+    #[inline]
     pub fn index(&self) -> usize {
         self.0 as _
     }
+    #[inline]
     pub fn parents(&self) -> ParentsWalker {
         ParentsWalker {
             node: *self,
             next: 0,
         }
     }
+    #[inline]
     pub fn children(&self) -> ChildrenWalker {
         ChildrenWalker {
             node: *self,
@@ -156,26 +161,31 @@ struct Nodes<'a, N> {
 }
 
 impl<'a, N> Nodes<'a, N> {
+    #[inline]
     fn get(&self, index: NodeIndex) -> Option<&Node<N>> {
         self.inner
             .get(index.index())
             .and_then(|n| n.as_ref().map(|n| &**n))
     }
 
+    #[inline]
     fn get_mut(&mut self, index: NodeIndex) -> Option<&mut Node<N>> {
         self.inner
             .get_mut(index.index())
             .and_then(|n| n.as_mut().map(|n| &mut **n))
     }
 
+    #[inline]
     fn index_mut(&mut self, index: NodeIndex) -> &mut Node<N> {
         self.inner[index.index()].as_mut().unwrap()
     }
 
+    #[inline]
     fn index(&self, index: NodeIndex) -> &Node<N> {
         self.inner[index.index()].as_ref().unwrap()
     }
 
+    #[inline]
     fn exists(&self, index: NodeIndex) -> bool {
         self.inner.get(index.index()).map_or(false, |n| n.is_some())
     }
@@ -207,36 +217,62 @@ struct Edges<'a, E> {
 }
 
 impl<'a, E> Edges<'a, E> {
+    #[inline]
     fn get(&self, index: EdgeIndex) -> Option<&Edge<E>> {
         self.inner
             .get(index.index())
             .and_then(|e| e.as_ref().map(|e| &**e))
     }
 
+    #[inline]
     pub fn source(&self, index: EdgeIndex) -> Option<NodeIndex> {
         self.get(index).map(|edge| edge.nodes.from)
     }
 
+    #[inline]
     pub fn destination(&self, index: EdgeIndex) -> Option<NodeIndex> {
         self.get(index).map(|edge| edge.nodes.to)
     }
 
+    #[inline]
     fn get_mut(&mut self, index: EdgeIndex) -> Option<&mut Edge<E>> {
         self.inner
             .get_mut(index.index())
             .and_then(|e| e.as_mut().map(|e| &mut **e))
     }
 
+    #[inline]
     fn index(&self, index: EdgeIndex) -> &Edge<E> {
         self.inner[index.index()].as_ref().unwrap()
     }
 
+    #[inline]
     fn index_mut(&mut self, index: EdgeIndex) -> &mut Edge<E> {
         self.inner[index.index()].as_mut().unwrap()
     }
 
+    #[inline]
     fn exists(&self, index: EdgeIndex) -> bool {
         self.inner.get(index.index()).map_or(false, |n| n.is_some())
+    }
+
+    #[inline]
+    fn pair_mut(&mut self, first: EdgeIndex, second: EdgeIndex) -> (&mut Edge<E>, &mut Edge<E>) {
+        if first.index() < second.index() {
+            let (left, right) = self.inner.split_at_mut(second.index());
+            (
+                left[first.index()].as_mut().unwrap(),
+                right[0].as_mut().unwrap(),
+            )
+        } else if first.index() > second.index() {
+            let (left, right) = self.inner.split_at_mut(first.index());
+            (
+                right[0].as_mut().unwrap(),
+                left[second.index()].as_mut().unwrap(),
+            )
+        } else {
+            panic!("Asked for pair of mutable references to the same edge")
+        }
     }
 }
 
@@ -379,6 +415,20 @@ impl<'a, N, E> Graph<'a, N, E> {
             return Err(GraphError::InvalidIndex);
         }
         let (first, second) = self.nodes.pair_mut(first, second);
+        Ok((&mut first.inner, &mut second.inner))
+    }
+
+    /// Get two edges as mutable at the same time.
+    /// Node ids must be different.
+    pub fn edge_pair_mut(
+        &mut self,
+        first: EdgeIndex,
+        second: EdgeIndex,
+    ) -> Result<(&mut E, &mut E), GraphError> {
+        if first == second || !self.edges.exists(first) || !self.edges.exists(second) {
+            return Err(GraphError::InvalidIndex);
+        }
+        let (first, second) = self.edges.pair_mut(first, second);
         Ok((&mut first.inner, &mut second.inner))
     }
 
@@ -589,6 +639,21 @@ impl<'a, N, E> Graph<'a, N, E> {
             .copied()
     }
 
+    pub fn has_edge<F>(&self, from: NodeIndex, to: NodeIndex, mut predicate: F) -> bool
+    where
+        F: FnMut(&E) -> bool,
+    {
+        self.nodes
+            .index(from)
+            .outgoing
+            .iter()
+            .find(|edge| {
+                let edge = self.edges.index(**edge);
+                edge.nodes.to == to && predicate(&edge.inner)
+            })
+            .is_some()
+    }
+
     pub fn get_edge_endpoints(&self, index: EdgeIndex) -> Option<EdgeNodes> {
         self.edges.get(index).map(|edge| edge.nodes)
     }
@@ -717,12 +782,14 @@ impl<'a, 'b, N> Iterator for NodesIndicesIter<'a, 'b, N> {
 
 impl<'a, N, E> std::ops::Index<EdgeIndex> for Graph<'a, N, E> {
     type Output = E;
+    #[inline]
     fn index(&self, index: EdgeIndex) -> &Self::Output {
         &self.edges.index(index).inner
     }
 }
 
 impl<'a, N, E> std::ops::IndexMut<EdgeIndex> for Graph<'a, N, E> {
+    #[inline]
     fn index_mut(&mut self, index: EdgeIndex) -> &mut Self::Output {
         &mut self.edges.index_mut(index).inner
     }
@@ -730,12 +797,14 @@ impl<'a, N, E> std::ops::IndexMut<EdgeIndex> for Graph<'a, N, E> {
 
 impl<'a, N, E> std::ops::Index<NodeIndex> for Graph<'a, N, E> {
     type Output = N;
+    #[inline]
     fn index(&self, index: NodeIndex) -> &Self::Output {
         &self.nodes.index(index).inner
     }
 }
 
 impl<'a, N, E> std::ops::IndexMut<NodeIndex> for Graph<'a, N, E> {
+    #[inline]
     fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
         &mut self.nodes.index_mut(index).inner
     }
@@ -748,6 +817,7 @@ pub struct EdgesIndicesIter<'a, 'b, E> {
 
 impl<'a, 'b, E> Iterator for EdgesIndicesIter<'a, 'b, E> {
     type Item = EdgeIndex;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         while self.next < self.edges.inner.len() as u32 {
             let index = EdgeIndex::new(self.next);
@@ -760,7 +830,7 @@ impl<'a, 'b, E> Iterator for EdgesIndicesIter<'a, 'b, E> {
     }
 }
 #[derive(Debug)]
-pub struct GraphAllocator(Arena);
+pub struct GraphAllocator(pub Arena);
 impl GraphAllocator {
     pub fn with_capacity(capacity: usize) -> Self {
         GraphAllocator(Arena::with_capacity(capacity))
