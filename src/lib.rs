@@ -101,6 +101,10 @@ impl NodeIndex {
         self.0 as _
     }
     #[inline]
+    pub fn inner(&self) -> u32 {
+        self.0
+    }
+    #[inline]
     pub fn parents(&self) -> ParentsWalker {
         ParentsWalker {
             node: *self,
@@ -672,8 +676,9 @@ impl<'a, N, E> Graph<'a, N, E> {
 
         while let Some(index) = live.pop_front() {
             for (_, parent) in index.parents().iter(self) {
-                is_live.put(parent.index());
-                live.push_back(parent);
+                if !is_live.put(parent.index()) {
+                    live.push_back(parent);
+                }
             }
         }
 
