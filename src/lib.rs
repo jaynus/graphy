@@ -160,11 +160,24 @@ impl Direction {
 
 #[derive(Derivative, Debug)]
 #[derivative(Default(bound = ""))]
-struct Nodes<'a, N> {
+pub struct Nodes<'a, N> {
     inner: SmallVec<[Option<&'a mut Node<N>>; 128]>,
 }
 
 impl<'a, N> Nodes<'a, N> {
+    // :TakeShouldMove
+    // @Incomplete: this would ideally move (return `Option<N>`), but it is currently not possible
+    // as technically nodes are owned by the allocator and we only have exclusive references to them.
+    // This should change when we will use `purple::collections::Vec` instead.
+    // But for that it needs to be growable.
+    #[inline]
+    pub fn take(&mut self, index: NodeIndex) -> Option<&mut N> {
+        self.inner
+            .get_mut(index.index())
+            .and_then(|n| n.take())
+            .map(|n| &mut n.inner)
+    }
+
     #[inline]
     fn get(&self, index: NodeIndex) -> Option<&Node<N>> {
         self.inner
@@ -216,11 +229,20 @@ impl<'a, N> Nodes<'a, N> {
 
 #[derive(Derivative, Debug)]
 #[derivative(Default(bound = ""))]
-struct Edges<'a, E> {
+pub struct Edges<'a, E> {
     inner: SmallVec<[Option<&'a mut Edge<E>>; 256]>,
 }
 
 impl<'a, E> Edges<'a, E> {
+    // :TakeShouldMove
+    #[inline]
+    pub fn take(&mut self, index: EdgeIndex) -> Option<&mut E> {
+        self.inner
+            .get_mut(index.index())
+            .and_then(|n| n.take())
+            .map(|n| &mut n.inner)
+    }
+
     #[inline]
     fn get(&self, index: EdgeIndex) -> Option<&Edge<E>> {
         self.inner
@@ -229,12 +251,12 @@ impl<'a, E> Edges<'a, E> {
     }
 
     #[inline]
-    pub fn source(&self, index: EdgeIndex) -> Option<NodeIndex> {
+    fn source(&self, index: EdgeIndex) -> Option<NodeIndex> {
         self.get(index).map(|edge| edge.nodes.from)
     }
 
     #[inline]
-    pub fn destination(&self, index: EdgeIndex) -> Option<NodeIndex> {
+    fn destination(&self, index: EdgeIndex) -> Option<NodeIndex> {
         self.get(index).map(|edge| edge.nodes.to)
     }
 
@@ -290,11 +312,16 @@ impl<'a, N, E> Graph<'a, N, E> {
     pub fn new() -> Self {
         Self::default()
     }
+
     pub fn remove_node(&mut self, index: NodeIndex) {
         if !self.nodes.exists(index) {
             return;
         }
         self.remove_nodes(&[index])
+    }
+
+    pub fn into_items(self) -> (Nodes<'a, N>, Edges<'a, E>) {
+        (self.nodes, self.edges)
     }
 
     pub fn remove_nodes(&mut self, remove: &[NodeIndex]) {
