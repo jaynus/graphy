@@ -7,7 +7,6 @@ license = "MIT"
 description = "graphing library made for the specific use cases of rendy and amethyst"
 
 [dependencies]
-derivative = "1"
 smallvec = "0.6"
 rayon = "1.2"
 fixedbitset = "0.2"

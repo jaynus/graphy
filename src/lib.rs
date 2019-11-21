@@ -1,6 +1,5 @@
 pub mod walker;
 
-use derivative::Derivative;
 use fixedbitset::FixedBitSet;
 use purple::Arena;
 use smallvec::SmallVec;
@@ -158,10 +157,17 @@ impl Direction {
     }
 }
 
-#[derive(Derivative, Debug)]
-#[derivative(Default(bound = ""))]
+#[derive(Debug)]
 pub struct Nodes<'a, N> {
     inner: SmallVec<[Option<&'a mut Node<N>>; 128]>,
+}
+
+impl<N> Default for Nodes<'_, N> {
+    fn default() -> Self {
+        Self {
+            inner: SmallVec::default(),
+        }
+    }
 }
 
 impl<'a, N> Nodes<'a, N> {
@@ -176,6 +182,13 @@ impl<'a, N> Nodes<'a, N> {
             .get_mut(index.index())
             .and_then(|n| n.take())
             .map(|n| &mut n.inner)
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &N> {
+        self.inner
+            .iter()
+            .filter_map(|n| n.as_ref().map(|n| &n.inner))
     }
 
     #[inline]
@@ -227,10 +240,17 @@ impl<'a, N> Nodes<'a, N> {
     }
 }
 
-#[derive(Derivative, Debug)]
-#[derivative(Default(bound = ""))]
+#[derive(Debug)]
 pub struct Edges<'a, E> {
     inner: SmallVec<[Option<&'a mut Edge<E>>; 256]>,
+}
+
+impl<E> Default for Edges<'_, E> {
+    fn default() -> Self {
+        Self {
+            inner: SmallVec::default(),
+        }
+    }
 }
 
 impl<'a, E> Edges<'a, E> {
@@ -241,6 +261,13 @@ impl<'a, E> Edges<'a, E> {
             .get_mut(index.index())
             .and_then(|n| n.take())
             .map(|n| &mut n.inner)
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &E> {
+        self.inner
+            .iter()
+            .filter_map(|n| n.as_ref().map(|n| &n.inner))
     }
 
     #[inline]
@@ -302,12 +329,21 @@ impl<'a, E> Edges<'a, E> {
     }
 }
 
-#[derive(Derivative, Debug)]
-#[derivative(Default(bound = ""))]
+#[derive(Debug)]
 pub struct Graph<'a, N, E> {
     nodes: Nodes<'a, N>,
     edges: Edges<'a, E>,
 }
+
+impl<N, E> Default for Graph<'_, N, E> {
+    fn default() -> Self {
+        Self {
+            nodes: Nodes::default(),
+            edges: Edges::default(),
+        }
+    }
+}
+
 impl<'a, N, E> Graph<'a, N, E> {
     pub fn new() -> Self {
         Self::default()
